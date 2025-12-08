@@ -30,7 +30,6 @@ def draftkings_scraper(sport = "basketball", league = "nba"):
                 teams.append(team)
             if len(teams) >= 2:
                 event_name = f"{teams[0]} @ {teams[1]}"
-                #print(event_name)
             
         found_spread_total_moneyline_elements = events.find_all("button", {"data-testid": "component-builder-market-button"})
         if len(found_spread_total_moneyline_elements) < 6:
