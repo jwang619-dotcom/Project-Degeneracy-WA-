@@ -85,6 +85,13 @@ def draftkings_scraper(sport = "basketball", league = "nba"):
 
     return pd.DataFrame(market_data)
 
+def standardize_team_name_TSB(team):
+    team_name_mapping = {
+        "PHX Suns": "PHO Suns",
+        "WSH Wizards": "WAS Wizards"
+    }
+    return team_name_mapping.get(team, team)
+
 def tsb_scraper(sport = "basketball", league = "nba"):
     browser = webdriver.Chrome()
     browser.maximize_window()
@@ -115,10 +122,11 @@ def tsb_scraper(sport = "basketball", league = "nba"):
             teams = []
             for found_team_element in found_team_elements:
                 team = found_team_element.text.strip()
-                teams.append(team)
-                if len(teams) >= 2:
-                    event_name = f"{teams[0]} @ {teams[1]}"
-                    print(event_name)
+                team = standardize_team_name_TSB(team)
+                if team:
+                    teams.append(team)
+            if len(teams) >= 2:
+                event_name = f"{teams[0]} @ {teams[1]}"
 
         found_spread_total_moneyline_elements = events.find_all("button", {"aria-hidden": "false"})
         if len(found_spread_total_moneyline_elements) < 6:
@@ -185,6 +193,78 @@ def market_scrapers():
     df_market = pd.concat([df_draftkings, df_thescorebet], ignore_index=True)
     return df_market
 
-df = market_scrapers()
-print(df)
+# Find opposite market selection
+def market_opposites(row):
+    if row["market_type"] == "spread":
+        team1, team2 = row["event_name"].split(" @ ")
+        selected_team = row["selection"].rsplit(" ", 1)[0]
+        if selected_team == team1:
+            spread_value = row["selection"].rsplit(" ", 1)[1]
+            if spread_value.startswith("+"):
+                spread_value = spread_value.replace("+", "-")
+            elif spread_value.startswith("-"):
+                spread_value = spread_value.replace("-", "+")
+            return team2 + " " + spread_value
+        elif selected_team == team2:
+            spread_value = row["selection"].rsplit(" ", 1)[1]
+            if spread_value.startswith("+"):
+                spread_value = spread_value.replace("+", "-")
+            elif spread_value.startswith("-"):
+                spread_value = spread_value.replace("-", "+")
+            return team1 + " " + spread_value
 
+    elif row["market_type"] == "total":
+        if "Over" in row["selection"]:
+            return "Under" + " " + row["selection"].rsplit(" ", 1)[1]
+        elif "Under" in row["selection"]:
+            return "Over" + " " + row["selection"].rsplit(" ", 1)[1]
+
+    elif row["market_type"] == "moneyline":
+        team1, team2 = row["event_name"].split(" @ ")
+        selected_team = row["selection"]
+        if selected_team == team1:
+            return team2
+        elif selected_team == team2:
+            return team1
+
+
+def market_spreadsheet():
+    df = market_scrapers()
+    # Replace "Even" with +100 in odds column
+    df.loc[df['odds'].str.contains("even", case=False, na=False), 'odds'] = "+100"
+
+    all_odds_keys = ['event_name', 'market_type', 'selection']
+    df['books'] = df.groupby(all_odds_keys)['odds'].transform('count')
+
+    # Creates a "lookup" table and then merges it back to the original dataframe with a left join based on the keys
+    all_odds_map = (df.groupby(all_odds_keys)['odds'].apply(lambda x: list(x.astype(str))))
+    df = df.merge(
+        all_odds_map.rename('all_odds'), 
+        on=all_odds_keys, 
+        how='left'
+    )
+
+    # Adds opposite market selection column to main dataframe
+    df['opposite_market_selection'] = df.apply(market_opposites, axis=1)
+
+    # Creates a "lookup" table for opposite market odds and then merges it back to the original dataframe with a left join based on the keys
+    all_opposite_odds_map = (df.groupby(all_odds_keys)['odds'].apply(lambda x: list(x.astype(str))))
+    df = df.merge(
+        all_opposite_odds_map.rename('opposite_market_all_odds'), 
+        left_on=["event_name", "market_type", "opposite_market_selection"],
+        right_index=True,
+        how='left'
+    )
+
+    cols_to_show = [
+        "event_name",
+        "market_type",
+        "selection",
+        "odds",
+        "all_odds",
+        "opposite_market_all_odds"]
+
+    pd.set_option('display.max_rows', None)
+    print(df[df['books'] > 1][cols_to_show])
+
+market_spreadsheet()
