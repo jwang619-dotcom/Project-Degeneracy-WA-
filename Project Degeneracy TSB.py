@@ -6,7 +6,8 @@ import pandas as pd
 
 def standardize_team_name_TSB(team):
     team_name_mapping = {
-        "PHX Suns": "PHO Suns"
+        "PHX Suns": "PHO Suns",
+        "WSH Wizards": "WAS Wizards"
     }
     return team_name_mapping.get(team, team)
 
@@ -99,5 +100,6 @@ def tsb_scraper(sport = "basketball", league = "nba"):
     
     df = pd.DataFrame(market_data)
     print(df)
+
 
 tsb_scraper()
