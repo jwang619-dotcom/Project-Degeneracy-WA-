@@ -101,5 +101,4 @@ def tsb_scraper(sport = "basketball", league = "nba"):
     df = pd.DataFrame(market_data)
     print(df)
 
-
 tsb_scraper()
