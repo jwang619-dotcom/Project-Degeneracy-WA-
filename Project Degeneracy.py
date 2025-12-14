@@ -4,6 +4,7 @@ import time
 from bs4 import BeautifulSoup
 import pandas as pd
 import concurrent.futures
+import requests
 
 def draftkings_scraper(sport = "basketball", league = "nba"):
     browser = webdriver.Chrome()
@@ -227,6 +228,25 @@ def market_opposites(row):
         elif selected_team == team2:
             return team1
 
+def cnm_api(leg1_odds, leg2_odds, final_odds):
+    url = "http://api.crazyninjaodds.com/api/devigger/v1/sportsbook_devigger.aspx?api=open"
+    
+    leg1_odds_str = ",".join(str(x).replace("−", "-") for x in leg1_odds)
+    leg2_odds_str = ",".join(str(x).replace("−", "-") for x in leg2_odds)
+    final_odds_str = str(final_odds).replace("−", "-")
+
+    params = {
+        "LegOdds": f"AVG({leg1_odds_str})/AVG({leg2_odds_str})",
+        "FinalOdds": f"{final_odds_str}",
+        "DevigMethod": 2, 
+        "Args": "ev_p,fo_o"
+        }
+
+    response = requests.get(url, params=params)
+    response_text = response.json()
+    fv = response_text["Final"]["FairValue_Odds"]
+    ev = round(((response_text["Final"]["EV_Percentage"] * 100)), 1)
+    return {"fv": fv, "ev%": ev}
 
 def market_spreadsheet():
     df = market_scrapers()
@@ -250,21 +270,36 @@ def market_spreadsheet():
     # Creates a "lookup" table for opposite market odds and then merges it back to the original dataframe with a left join based on the keys
     all_opposite_odds_map = (df.groupby(all_odds_keys)['odds'].apply(lambda x: list(x.astype(str))))
     df = df.merge(
-        all_opposite_odds_map.rename('opposite_market_all_odds'), 
+        all_opposite_odds_map.rename('all_opposite_market_odds'), 
         left_on=["event_name", "market_type", "opposite_market_selection"],
         right_index=True,
         how='left'
     )
 
+    # Calculate EV% using the cnm_api function
+    df[["fv", "ev%"]] = df.apply(lambda row: pd.Series(cnm_api(
+        leg1_odds=(row['all_odds']),
+        leg2_odds=(row['all_opposite_market_odds']),
+        final_odds=row['odds'])), axis=1)
+    
+    # Format the 'fv' column to include '+' for positive values
+    df["fv"] = df["fv"].astype(int).apply(lambda x: f"+{x}" if x >= 100 else str(x))
+    
+    # Displays the dataframe with selected columns where there is more than 1 book for that market
     cols_to_show = [
         "event_name",
         "market_type",
         "selection",
         "odds",
-        "all_odds",
-        "opposite_market_all_odds"]
+        "sportbook",
+        "fv",
+        "ev%",
+        "books"
+        ]
 
     pd.set_option('display.max_rows', None)
-    print(df[df['books'] > 1][cols_to_show])
+    df = df[df['books'] > 1][cols_to_show]
+    df = df.sort_values(by=["ev%"], ascending=False).reset_index(drop=True)
+    print(df)
 
 market_spreadsheet()
