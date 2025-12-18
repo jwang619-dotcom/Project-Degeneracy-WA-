@@ -1,0 +1,119 @@
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+## from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+import time
+from bs4 import BeautifulSoup
+import pandas as pd
+import concurrent.futures
+import requests
+
+def caesars_scraper(sport = "basketball"):
+    browser = webdriver.Chrome()
+
+    # Remove webdriver property
+    browser.execute_cdp_cmd('Page.addScriptToEvaluateOnNewDocument', {
+        'source': '''
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            })
+        '''
+    })
+
+    link = f"https://sportsbook.caesars.com/us/ny/bet/{sport}"
+    browser.get(link)
+
+    # Wait for EventCard elements to load
+    try:
+        WebDriverWait(browser, 15).until(
+            EC.presence_of_element_located((By.CLASS_NAME, "EventCard"))
+        )
+    except:
+        print("Timeout waiting for EventCards")
+
+    page_source = browser.page_source
+    soup = BeautifulSoup(page_source, 'html.parser')
+    browser.quit()
+
+    # Find all EventCard containers
+    games = soup.find_all("div", class_="EventCard")
+
+    all_game_data = []
+
+    for game in games:
+        try:
+            # Find the two team rows (Cleveland Cavaliers and Chicago Bulls in the example)
+            team_rows = game.find_all("div", attrs={"data-filter-group": True})
+
+            if len(team_rows) < 2:
+                continue
+
+            # Extract team names
+            away_team_elem = team_rows[0].find("div", class_="cui__competitor_wrapper")
+            home_team_elem = team_rows[1].find("div", class_="cui__competitor_wrapper")
+
+            if not away_team_elem or not home_team_elem:
+                continue
+
+            # Get full team names from the longest span (hidden @[240px]:cui-block)
+            away_team_spans = away_team_elem.find_all("span", class_=lambda x: x and "heading-md" in x)
+            home_team_spans = home_team_elem.find_all("span", class_=lambda x: x and "heading-md" in x)
+
+            away_team = away_team_spans[-1].text.strip() if away_team_spans else "Unknown"
+            home_team = home_team_spans[-1].text.strip() if home_team_spans else "Unknown"
+
+            event_name = f"{away_team} @ {home_team}"
+
+            # Extract odds for away team (first row)
+            away_buttons = team_rows[0].find_all("button", attrs={"data-cy": "market-button-btn"})
+            # Extract odds for home team (second row)
+            home_buttons = team_rows[1].find_all("button", attrs={"data-cy": "market-button-btn"})
+
+            if len(away_buttons) < 3 or len(home_buttons) < 3:
+                continue
+
+            # Away team data (Spread, Moneyline, Total Over)
+            away_spread_line = away_buttons[0].find("span", class_="cui__market-button-line")
+            away_spread_odds = away_buttons[0].find("span", attrs={"data-cy": "market-button-odds"})
+            away_ml_odds = away_buttons[1].find("span", attrs={"data-cy": "market-button-odds"})
+            away_total_line = away_buttons[2].find("span", class_="cui__market-button-line")
+            away_total_odds = away_buttons[2].find("span", attrs={"data-cy": "market-button-odds"})
+
+            # Home team data (Spread, Moneyline, Total Under)
+            home_spread_line = home_buttons[0].find("span", class_="cui__market-button-line")
+            home_spread_odds = home_buttons[0].find("span", attrs={"data-cy": "market-button-odds"})
+            home_ml_odds = home_buttons[1].find("span", attrs={"data-cy": "market-button-odds"})
+            home_total_line = home_buttons[2].find("span", class_="cui__market-button-line")
+            home_total_odds = home_buttons[2].find("span", attrs={"data-cy": "market-button-odds"})
+
+            # Add away team row
+            all_game_data.append({
+                "Event": event_name,
+                "Team": away_team,
+                "Spread": f"{away_spread_line.text.strip()} ({away_spread_odds.text.strip()})" if away_spread_line and away_spread_odds else "",
+                "Total": f"Over {away_total_line.text.strip()} ({away_total_odds.text.strip()})" if away_total_line and away_total_odds else "",
+                "Money Line": away_ml_odds.text.strip() if away_ml_odds else ""
+            })
+
+            # Add home team row
+            all_game_data.append({
+                "Event": event_name,
+                "Team": home_team,
+                "Spread": f"{home_spread_line.text.strip()} ({home_spread_odds.text.strip()})" if home_spread_line and home_spread_odds else "",
+                "Total": f"Under {home_total_line.text.strip()} ({home_total_odds.text.strip()})" if home_total_line and home_total_odds else "",
+                "Money Line": home_ml_odds.text.strip() if home_ml_odds else ""
+            })
+
+        except Exception as e:
+            print(f"Error parsing a game: {e}")
+            continue
+
+    # Create Dataframe
+    df = pd.DataFrame(all_game_data)
+    return df
+
+if __name__ == "__main__":
+    results_df = caesars_scraper()
+    print(results_df.to_string())
+
